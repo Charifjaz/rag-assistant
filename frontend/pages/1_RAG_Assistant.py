@@ -14,156 +14,127 @@ from app.utils.utils_streamlit import display_model_config
 from app.rag_engine import RAGPipeline, FAISSRetriever, TemporaryFAISSRetriever,OpenAILLM
 
 
+
+# ... (les imports restent identiques)
+
 # 🎨 Configuration de la page
 st.set_page_config(
     page_title="RAG Assistant",
-    page_icon="🧠",
+    page_icon="🤖",
     layout="wide",
     initial_sidebar_state="expanded",
 )
 
 # 🌟 Titre principal
-st.title("🔎 RAG Chatbot - Question / Réponse augmentée")
-st.markdown("""
-Pose ta question ci-dessous ✉️
-Le modèle te répondra à partir des documents PDF que tu as indexés.
-""")
+st.title("🤖 RAG Assistant")
+st.caption("Pose tes questions sur tes documents - Permanent ou Temporaire")
 
-# 🧠 Barre latérale : Clé API et paramètres
+# 🧠 Barre latérale : Configuration
 with st.sidebar:
-    # ⚙️ Paramètres du modèle (directement visibles)
+    # ⚙️ Paramètres du modèle
     model, temperature, k = display_model_config("global")
-
-     # 🔑 Clé OpenAI personnalisée
+    
+    # 🔑 Clé API
     user_api_key = st.text_input(
-        "🔑 Ta clé OpenAI (optionnelle)",
+        "🔑 Clé OpenAI (optionnelle)",
         type="password",
         placeholder="sk-...",
-        # help="Elle sera utilisée à la place de celle du .env si renseignée.",
     )
-
-
-# 🖋️ Entrée utilisateur : Question
-question = st.text_input(
-    "❓ Ta question :",
-    placeholder="Ex: Ask me ! The World is yours."
-)
-
-# load the key 
-load_api_key(user_api_key)
-
-
-# 🚀 Bouton d'envoi de la question
-if st.button("📤 Poser la question") and question:
-    with st.spinner("🤖 Le modèle réfléchit..."):
-        try:
-            # Initialise les composants
-            llm = OpenAILLM(model_name=model, temperature=temperature, user_api_key=user_api_key)
-            retriever = FAISSRetriever(persist_path=config.VECTORSTORE_PATH)
-            pipeline = RAGPipeline(retriever=retriever, llm=llm)
-
-            # Pose la question
-            result = pipeline.ask(question, k=k)
-
-            # 🔸 Layout en deux colonnes
-            col_left, col_right = st.columns([2, 1])
-
-            # 🔸 Colonne gauche : réponse
-            with col_left:
-                st.success("✅ Réponse :")
-                st.markdown(result["result"])
-
-            # 🔸 Colonne droite : documents sources
-            with col_right:
-                st.markdown("""
-                #### 📄 Sources documentaires utilisées
-                """)
-                if result.get("source_documents"):
-                    for i, doc in enumerate(result["source_documents"], start=1):
-                        title = doc.metadata.get("source", "Document inconnu")
-                        page = doc.metadata.get("page", "?")
-                        content = doc.page_content[:500] + "..."
-
-                        with st.expander(f"📄 {title} (page {page})"):
-                            st.markdown(content)
-                else:
-                    st.info("Aucune source documentaire n'a été retournée.")
-
-        except Exception as e:
-            st.error(f"❌ Une erreur est survenue : {e}")
-            st.code(traceback.format_exc(), language="python")
-
-
-# 📁 Téléversement de fichiers temporaires
-st.warning("⚠️ Ce document ne sera **pas sauvegardé**. Il est utilisé uniquement pendant cette session.")
-uploaded_files = st.file_uploader("📎 Téléverse un fichier PDF pour faire du RAG temporaire :", 
-                                   type=["pdf"], 
-                                   accept_multiple_files=True)
-
-# 📄 Extraction des documents uploadés
-session_docs = []
-
-if uploaded_files:
-    for uploaded_file in uploaded_files:
-        # Créer un fichier temporaire
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
-            tmp.write(uploaded_file.read())
-            tmp_path = tmp.name
-
-        # Charger avec LangChain
-        loader = PyPDFLoader(tmp_path)
-        docs = loader.load()
-
-        # Ajouter la source pour affichage futur
-        for doc in docs:
-            doc.metadata["source"] = uploaded_file.name
-        session_docs.extend(docs)
-
-        # Supprimer le fichier temporaire une fois chargé
-        os.remove(tmp_path)
-
-    st.success(f"✅ {len(session_docs)} page(s) PDF chargée(s) depuis les documents uploadés.")
-
-if session_docs:
     st.divider()
-    st.markdown("## 💬 Pose ta question sur le document uploadé")
+    
+# 🔀 Création des onglets
+tab1, tab2 = st.tabs(["📚 Base permanente", "📄 Session temporaire"])
 
-    question = st.text_input("❓ Ta question (document temporaire)")
+# ==============================================================================
+# ONGLET 1 - BASE PERMANENTE
+# ==============================================================================
+with tab1:
+    col_query, col_result = st.columns([1, 3])
+    
+    with col_query:
+        question = st.text_input(
+            "❓ Question sur la base permanente",
+            placeholder="Pose ta question ici...",
+            key="main_question"
+        )
+        
+        if st.button("🔍 Analyser", key="main_ask_btn") and question:
+            with st.spinner("Recherche dans la base permanente..."):
+                try:
+                    # Initialisation et traitement
+                    llm = OpenAILLM(model_name=model, temperature=temperature, user_api_key=user_api_key)
+                    retriever = FAISSRetriever(persist_path=config.VECTORSTORE_PATH)
+                    pipeline = RAGPipeline(retriever=retriever, llm=llm)
+                    result = pipeline.ask(question, k=k)
 
-    if st.button("📤 Interroger le document") and question:
-        with st.spinner("💡 Génération en cours..."):
-            try:
-                # result = run_rag_on_uploaded_docs(
-                #     docs=session_docs,
-                #     question=question,
-                #     model=model,
-                #     temperature=temperature,
-                #     k=k,
-                #     user_api_key=user_api_key
-                # )
+                    # Affichage résultat
+                    with col_result:
+                        st.success("📝 Réponse :")
+                        st.markdown(result["result"])
+                        
+                        st.subheader("🔎 Sources", divider="gray")
+                        for doc in result.get("source_documents", []):
+                            st.caption(f"📑 {doc.metadata.get('source', '')} (page {doc.metadata.get('page', '?')})")
 
-                # Pour le mode "temporaire"
-                llm = OpenAILLM(model_name=model, temperature=temperature, user_api_key=user_api_key)
-                retriever = TemporaryFAISSRetriever(docs=session_docs)
-                pipeline = RAGPipeline(retriever=retriever, llm=llm)
-                result = pipeline.ask(question, k=k)
+                except Exception as e:
+                    st.error(f"Erreur : {str(e)}")
 
-                st.success("🧠 Réponse :")
-                st.markdown(result["result"])
+# ==============================================================================
+# ONGLET 2 - SESSION TEMPORAIRE
+# ==============================================================================
+with tab2:
+    # 📤 Upload de fichiers
+    uploaded_files = st.file_uploader(
+        "Téléverser PDF(s) temporaire(s)",
+        type=["pdf"],
+        accept_multiple_files=True,
+        key="temp_uploader"
+    )
+    
+    # 📄 Traitement des fichiers
+    if uploaded_files:
+        session_docs = []
+        
+        # Extraction des pages
+        for uploaded_file in uploaded_files:
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+                tmp.write(uploaded_file.read())
+                loader = PyPDFLoader(tmp.name)
+                docs = loader.load()
+                for doc in docs:
+                    doc.metadata["source"] = uploaded_file.name
+                session_docs.extend(docs)
+                os.remove(tmp.name)
+        
+        st.toast(f"✅ {len(session_docs)} pages chargées", icon="📄")
+        
+        # ❓ Question temporaire
+        temp_question = st.text_input(
+            "❓ Question sur le(s) document(s)",
+            placeholder="Poser une question spécifique...",
+            key="temp_question"
+        )
+        
+        if st.button("🔍 Analyser documents", key="temp_ask_btn") and temp_question:
+            with st.spinner("Analyse en cours..."):
+                try:
+                    # Traitement
+                    llm = OpenAILLM(model_name=model, temperature=temperature, user_api_key=user_api_key)
+                    retriever = TemporaryFAISSRetriever(docs=session_docs)
+                    pipeline = RAGPipeline(retriever=retriever, llm=llm)
+                    result = pipeline.ask(temp_question, k=k)
 
-                st.markdown("📎 **Sources :**")
-                for doc in result["source_documents"]:
-                    st.markdown(f"- `{doc.metadata['source']}`")
+                    # Résultats
+                    st.success("📝 Réponse :")
+                    st.markdown(result["result"])
+                    
+                    st.subheader("🔎 Sources utilisées", divider="gray")
+                    for doc in result.get("source_documents", []):
+                        st.caption(f"📄 {doc.metadata['source']}")
 
-            except Exception as e:
-                st.error(f"❌ Erreur pendant l'exécution : {e}")
+                except Exception as e:
+                    st.error(f"Erreur : {str(e)}")
 
-
-# 🎡 Footer
-st.markdown(
-    "<div style='text-align: center; padding-top: 2rem;'>"
-    "<sub>🚀 Créé avec 💪 par <b>Charif EL JAZOULI</b> • "
-    "<a href='https://github.com/ton-lien-github' target='_blank'>GitHub</a></sub>"
-    "</div>",
-    unsafe_allow_html=True
-)
+# 🎡 Footer minimaliste
+st.divider()
+st.caption("🚀 Développé par [Votre nom] • [GitHub](https://github.com/ton-lien)")
