@@ -1,182 +1,202 @@
-import sys
-import os
-import traceback
+"""
+mo7ami_diali_app.py – full single‑file Streamlit app
+© 2025  •  Licence MIT
+"""
+
+# ----------------------------------------------------------------------------
+# 1️⃣  Imports & setup
+# ----------------------------------------------------------------------------
+import sys, os, traceback
+from pathlib import Path
 import streamlit as st
 
-# --- Project imports ---------------------------------------------------------
-# 👇 Add repo root to PYTHONPATH so that `app.*` imports resolve when running
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+# navbar helper (optional)
+try:
+    from streamlit_option_menu import option_menu
+except ImportError:
+    st.error("Le package 'streamlit-option-menu' est requis → pip install streamlit-option-menu")
+    st.stop()
 
-from langchain_community.document_loaders import PyPDFLoader  # noqa: F401 – kept for future upload feature
+# local package path (adapt if needed)
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 from app import config
 from app.utils.utils import load_api_key
 from app.utils.utils_streamlit import display_model_config
 from app.rag_engine import RAGPipeline, FAISSRetriever, OpenAILLM
 
-# ---------------------------------------------------------------------------
-# 🎨 Page configuration
-# ---------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+# 2️⃣  Streamlit page configuration
+# ----------------------------------------------------------------------------
 st.set_page_config(
-    page_title="Mo7ami Diali – Assistant Juridique IA",
+    page_title="Mo7ami Diali – Assistant Juridique IA",
     page_icon="⚖️",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="collapsed",
 )
 
-# ---------------------------------------------------------------------------
-# 🏠 HERO SECTION
-# ---------------------------------------------------------------------------
-st.title("⚖️ Mo7ami Diali – Votre assistant juridique intelligent")
+# ----------------------------------------------------------------------------
+# 3️⃣  Custom CSS (kept minimal)
+# ----------------------------------------------------------------------------
+CUSTOM_CSS = """
+<style>
+html, body, [class*='st-'] { font-family: 'Inter', sans-serif; }
 
-st.markdown(
-    """
-    Saisissez **toute question de droit** – en français ou en arabe – et recevez **en quelques secondes** une
-    réponse structurée **appuyée sur les textes de loi cités**. Idéal pour les **professionnels**, les **étudiants**
-    ou toute personne ayant besoin d’un éclairage rapide et fiable.
-    """
-)
+/* hero */
+.hero { background: radial-gradient(circle at top left, #1e3c72, #2a5298 55%); padding:5rem 2rem 6rem; border-radius:1.5rem; color:#fff; text-align:center; }
+.hero h1{font-size:3rem;margin-bottom:.5rem}
+.hero p{font-size:1.25rem;opacity:.9}
+.cta-btn{background:#ffd66e!important;color:#000!important;border:none!important;font-weight:600;padding:.75rem 2.25rem;border-radius:50px}
 
-# # 👉 Call‑to‑action to focus the input (purely cosmetic on first load)
-# if st.button("✨ Poser ma première question"):
-#     st.experimental_set_query_params(focus="input")
+/* cards */
+.card{background:#ffffff10;border:1px solid #ffffff22;padding:2rem;border-radius:1.25rem;text-align:center;transition:all .2s ease}
+.card:hover{transform:translateY(-4px);box-shadow:0 4px 20px #00000040}
+.pricing-title{font-size:1.5rem;font-weight:600;margin-bottom:.5rem}
+.price{font-size:2.5rem;font-weight:700;margin:.5rem 0 1rem 0}
+ul.features{list-style:none;padding:0;font-size:.95rem}
+ul.features li{padding:.25rem 0}
 
-# # ---------------------------------------------------------------------------
-# # 🖊️ QUESTION INPUT
-# # ---------------------------------------------------------------------------
-# placeholder_examples = [
-#     "Quels sont les droits d’une femme mariée selon le Code de la famille ?",
-#     "Comment résilier un bail commercial de manière anticipée ?",
-#     "Quelles sont les conditions d’un recours fiscal en appel ?",
-# ]
+footer{text-align:center;font-size:.8rem;margin-top:4rem;opacity:.7}
+</style>
+"""
 
-# rotate placeholder each refresh using modulo of run count in session state
-# run_count = st.session_state.get("run_count", 0)
-# st.session_state["run_count"] = run_count + 1
-# placeholder = placeholder_examples[run_count % len(placeholder_examples)]
+st.markdown(CUSTOM_CSS, unsafe_allow_html=True)
 
-st.markdown("""
-
-Bienvenue sur **Mo7ami Diali**, votre assistant juridique intelligent.  
-Grâce à l’IA, le savoir juridique devient **accessible**, **instantané** et **personnalisé**.
-
-> 🧑‍⚖️ *L’avocat ne se trouve plus derrière un bureau : il est entre vos mains.*
-
----
-
-## 💡 Que pouvez-vous faire ici ?
-- 🔎 Poser une question juridique en langage naturel
-- 📚 Obtenir des réponses étayées par les textes de loi indexés (Code pénal, Moudawana, etc.)
-- 📄 Identifier les articles de référence utilisés pour chaque réponse
-
----
-
-## 🧠 Une nouvelle façon de pratiquer le droit
-Vous êtes étudiant, juriste, ou avocat ?
-Mo7ami Diali vous aide à **trouver les bons textes**, **plus vite**, **plus sûrement**, **avec la clarté d’une IA entraînée sur votre base documentaire**.
-
----
-""")
-
-
-question = st.text_input(
-    "📮 Formulez votre question juridique :",
-    placeholder="Ex: Quels sont les droits d’une femme mariée selon le Code de la famille ?",
-)
-
-# ---------------------------------------------------------------------------
-# 🔧 SIDEBAR – MODEL & ADVANCED OPTIONS
-# ---------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+# 4️⃣  Sidebar navigation
+# ----------------------------------------------------------------------------
 with st.sidebar:
-    st.header("⚙️ Paramètres du modèle")
+    nav = option_menu(
+        menu_title="Navigation",
+        options=["Accueil", "Consultation IA", "Tarifs", "À propos"],
+        icons=["house", "chat-dots", "credit-card", "info-circle"],
+        default_index=0,
+    )
 
-    # Wrap existing component in an expander to hide complexity from casual users
-    with st.expander("Options avancées", expanded=False):
+# helper: redirect between pages from button press
+def redirect(page_name: str):
+    st.session_state["_redirect"] = page_name
+
+if "_redirect" in st.session_state:
+    nav = st.session_state.pop("_redirect")
+
+# ----------------------------------------------------------------------------
+# 5️⃣  HOME PAGE
+# ----------------------------------------------------------------------------
+if nav == "Accueil":
+    # hero section
+    st.markdown('<div class="hero">', unsafe_allow_html=True)
+    st.markdown("<h1>⚖️ Mo7ami Diali</h1>", unsafe_allow_html=True)
+    st.markdown("<p>L’intelligence artificielle au service du droit marocain.</p>", unsafe_allow_html=True)
+    if st.button("Poser ma question", key="cta", on_click=lambda: redirect("Consultation IA")):
+        pass
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    # features
+    st.markdown("### Pourquoi Mo7ami Diali ?")
+    cols = st.columns(3)
+    features = [
+        ("🧠", "Réponses instantanées", "GPT‑4 + RAG sur Codes marocains"),
+        ("🔒", "Confidentialité totale", "Traitement local, aucun doc externe"),
+        ("🎓", "Pour pros & étudiants", "Préparation d’actes, révisions d’examens"),
+    ]
+    for col, (icon, title, desc) in zip(cols, features):
+        col.markdown(f"<div class='card'><div style='font-size:2rem'>{icon}</div><div class='pricing-title'>{title}</div><p>{desc}</p></div>", unsafe_allow_html=True)
+
+# ----------------------------------------------------------------------------
+# 6️⃣  CONSULTATION IA PAGE
+# ----------------------------------------------------------------------------
+if nav == "Consultation IA":
+    st.header("🤖 Consultation juridique assistée par IA")
+    st.write("Posez votre question, l’IA cite les articles de loi marocains pertinents.")
+
+    # advanced parameters
+    with st.expander("Paramètres avancés du modèle"):
         model, temperature, k = display_model_config("global")
+        user_api_key = st.text_input("🔑 Clé OpenAI (optionnelle)", type="password", placeholder="sk-...")
 
-    # 🔑 Optional user API key (overrides .env key)
-    user_api_key = st.text_input(
-        "🔑 Ta clé OpenAI (optionnelle)",
-        type="password",
-        placeholder="sk-...",
-        help="Si renseignée, elle sera utilisée à la place de la clé stockée dans l’environnement.",
-    )
+    # question input
+    examples = [
+        "Procédure de résiliation d’un bail commercial ?",
+        "Conditions du redressement judiciaire ?",
+        "Quels délais de paiement entre commerçants ?",
+    ]
+    idx = st.session_state.get("_ex_idx", 0)
+    placeholder = examples[idx % len(examples)]
+    st.session_state["_ex_idx"] = idx + 1
 
-    # 🌐 Interface language – groundwork for future i18n (not yet wired to the backend)
-    lang = st.selectbox("🌍 Langue de l’interface", ["Français", "العربية", "English"], index=0)
+    question = st.text_input("📮 Votre question :", placeholder=placeholder)
 
-    st.markdown("---")
-    st.markdown(
-        "<sub>Les **réponses fournies** ne constituent **pas un avis juridique** et ne remplacent pas la consultation d’un professionnel qualifié.</sub>",
-        unsafe_allow_html=True,
-    )
+    if st.button("📨 Obtenir la réponse") and question.strip():
+        with st.spinner("Analyse en cours …"):
+            try:
+                load_api_key(user_api_key)
+                llm = OpenAILLM(model_name=model, temperature=temperature, user_api_key=user_api_key)
+                retriever = FAISSRetriever(persist_path=config.VECTORSTORE_PATH)
+                pipeline = RAGPipeline(retriever=retriever, llm=llm)
+                result = pipeline.ask(question, k=k)
 
-# ---------------------------------------------------------------------------
-# 🚀 ASK THE QUESTION
-# ---------------------------------------------------------------------------
-if st.button("📨 Obtenir une réponse", type="primary") and question:
-    with st.spinner("🤖 Ton avocat numérique réfléchit..."):
-        try:
-            # 1️⃣ Load the key (user‑provided or default)
-            load_api_key(user_api_key)
+                col_ans, col_src = st.columns([2, 1])
+                with col_ans:
+                    st.success("## 🧠 Réponse")
+                    st.markdown(result["result"], unsafe_allow_html=True)
+                with col_src:
+                    st.markdown("## 📑 Sources")
+                    if not result.get("source_documents"):
+                        st.info("Aucune source retournée.")
+                    else:
+                        for doc in result["source_documents"]:
+                            title = doc.metadata.get("source", "Document")
+                            page = doc.metadata.get("page", "?")
+                            with st.expander(f"{title} – p.{page}"):
+                                st.markdown(doc.page_content[:900] + "…")
+            except Exception as e:
+                st.error(f"Erreur : {e}")
+                st.code(traceback.format_exc())
 
-            # 2️⃣ Build pipeline components
-            llm = OpenAILLM(model_name=model, temperature=temperature, user_api_key=user_api_key)
-            retriever = FAISSRetriever(persist_path=config.VECTORSTORE_PATH)
-            pipeline = RAGPipeline(retriever=retriever, llm=llm)
+# ----------------------------------------------------------------------------
+# 7️⃣  TARIFS PAGE
+# ----------------------------------------------------------------------------
+if nav == "Tarifs":
+    st.header("💳 Nos offres")
+    plans = [
+        {"name":"Étudiant","price":"0 DH","features":["50 questions / mois","GPT‑3.5","Support e‑mail"]},
+        {"name":"Pro Individuel","price":"149 DH / mois","features":["Illimité","GPT‑4 Turbo","Analyse PDF","Support 24 h"]},
+        {"name":"Cabinet","price":"549 DH / mois","features":["5 comptes","GPT‑4 Turbo + Vision","Index privé","Support prioritaire"]},
+    ]
+    cols = st.columns(len(plans))
+    for col, plan in zip(cols, plans):
+        feats = "".join(f"<li>✅ {f}</li>" for f in plan["features"])
+        col.markdown(
+            f"<div class='card'><div class='pricing-title'>{plan['name']}</div><div class='price'>{plan['price']}</div><ul class='features'>{feats}</ul><button class='cta-btn'>S’abonner</button></div>",
+            unsafe_allow_html=True,
+        )
+    st.markdown("**Besoin d’une offre sur-mesure ?** Contactez‑nous via l’onglet *À propos*.")
 
-            # 3️⃣ Ask the pipeline
-            result = pipeline.ask(question, k=k)
+# ----------------------------------------------------------------------------
+# 8️⃣  À PROPOS PAGE
+# ----------------------------------------------------------------------------
+if nav == "À propos":
+    st.header("ℹ️ À propos de Mo7ami Diali")
+    st.write("Projet open‑source visant à démocratiser l’accès au droit marocain grâce à l’IA.")
 
-            # -----------------------------------------------
-            # ⬅️ Answer | ➡️ Sources – two‑columns layout
-            # -----------------------------------------------
-            col_answer, col_sources = st.columns([2, 1], gap="large")
+    st.subheader("L’équipe")
+    st.markdown("* **Charif El Jazouli** – Lead dev IA\n* **Contributeurs GitHub** – vos PR sont les bienvenues !")
 
-            with col_answer:
-                st.success("## 🧠 Réponse générée par l’IA")
-                st.markdown(result["result"], unsafe_allow_html=True)
+    st.subheader("Contactez‑nous")
+    with st.form("contact"):
+        col1, col2 = st.columns(2)
+        name = col1.text_input("Nom")
+        email = col2.text_input("E‑mail")
+        message = st.text_area("Message")
+        submitted = st.form_submit_button("Envoyer")
+        if submitted:
+            if email and message:
+                st.success("Merci ! Nous vous répondrons sous 24 h.")
+            else:
+                st.error("Veuillez remplir les champs requis.")
 
-            with col_sources:
-                st.markdown("## 📂 Sources juridiques consultées")
-                if result.get("source_documents"):
-                    for i, doc in enumerate(result["source_documents"], start=1):
-                        title = doc.metadata.get("source", "Document inconnu")
-                        page = doc.metadata.get("page", "?")
-                        content = doc.page_content[:600] + "…"
-                        with st.expander(f"📄 {title} (page {page})"):
-                            st.markdown(content)
-                else:
-                    st.info("Aucune source documentaire n’a été retournée.")
-
-        except Exception as e:
-            st.error(f"❌ Une erreur est survenue : {e}")
-            st.code(traceback.format_exc(), language="python")
-
-# ---------------------------------------------------------------------------
-# 🦺 PRIVACY & SECURITY NOTICE
-# ---------------------------------------------------------------------------
+# ----------------------------------------------------------------------------
+# 9️⃣  Footer
+# ----------------------------------------------------------------------------
 st.markdown("---")
-st.markdown(
-    """
-    ### 🛡️ Confidentialité
-    Vos requêtes sont **traitées localement** ; **aucun document** n’est envoyé à des serveurs tiers.
-    """
-)
-
-# ---------------------------------------------------------------------------
-# 📜 FOOTER
-# ---------------------------------------------------------------------------
-st.markdown(
-    """
-    <div style="text-align:center; padding-top:2rem;">
-        <sub>⚖️ <b>Mo7ami Diali</b> – Plateforme d’assistance juridique IA • Développée avec 💡 par
-        <a href="https://github.com/charifel" target="_blank">Charif EL JAZOULI</a> •
-        <a href="https://github.com/ton-lien-github" target="_blank">Voir le projet sur GitHub</a></sub>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
-
-# ---------------------------------------------------------------------------
-# END OF FILE ✨
-# ---------------------------------------------------------------------------
+st.markdown("<footer>⚖️ <b>Mo7ami Diali</b> © 2025 • Code sur <a href='https://github.com/ton-repo' target='_blank'>GitHub</a></footer>", unsafe_allow_html=True)
